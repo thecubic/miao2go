@@ -1,8 +1,9 @@
 package main
 
+// miao2go: accept new sensor (when relevant)
+
 import (
 	"flag"
-	// "fmt"
 	"github.com/currantlabs/ble"
 	"github.com/currantlabs/ble/linux"
 	"github.com/thecubic/miao2go"
@@ -12,10 +13,9 @@ import (
 )
 
 var (
-	timeout    = flag.Duration("timeout", 60*time.Second, "timeout")
-	miao       = flag.String("miao", "", "address of the miaomiao")
-	dup        = flag.Bool("dup", true, "allow duplicate reported")
-	clientChar = ble.MustParse("00002902-0000-1000-8000-00805f9b34fb")
+	timeout = flag.Duration("timeout", 60*time.Second, "timeout")
+	miao    = flag.String("miao", "", "address of the miaomiao")
+	check   = flag.Bool("check", true, "check for NewSensor condition")
 )
 
 func main() {
@@ -48,44 +48,39 @@ func main() {
 		log.Printf("connected to %v", cln.Address())
 	}
 
-	conend := make(chan struct{})
-
 	go func() {
 		<-cln.Disconnected()
 		log.Printf("disconnected from %v", cln.Address())
-		close(conend)
 	}()
 
-	// miao, err := getMiaoDescriptor(cln)
 	miao, err := miao2go.AttachBTLE(cln)
-
 	if err != nil {
 		log.Fatalf("couldn't get Miao descriptor: %v", err)
 	}
 	log.Printf("miao: %v\n", miao)
+	mr, err := miao.PollResponse()
 
-	err = miao.Subscribe()
-	if err != nil {
-		log.Fatalf("couldn't sub/unsub Miao: %v", err)
-	}
-
-	mr, err := miao.MiaoResponse()
-	if err != nil {
-		log.Fatalf("mr error: %v", err)
-	}
-
+	newSensorMode := false
 	switch mr.Type {
 	case miao2go.MPLibre:
-		log.Printf("Libre response: %v", mr.Data)
-		mmp := miao2go.CreateMiaoMiaoPacket(mr.Data)
-		log.Printf("mmp: %v", mmp)
+		log.Printf("miaomiao: reporting mode")
 	case miao2go.MPNoSensor:
-		log.Printf("No Sensor")
+		log.Printf("miaomiao: no sensor")
 	case miao2go.MPNewSensor:
-		log.Printf("New Sensor")
+		log.Printf("miaomiao: new sensor")
+		newSensorMode = true
 	}
 
-	// TODO: do something with the packet
+	if *check && !newSensorMode {
+		log.Fatalf("sensor not in new sensor mode")
+	}
+
+	log.Printf("accepting sensor...")
+
+	err = miao.AcceptNewSensor()
+	if err != nil {
+		log.Printf("couldn't accept new sensor")
+	}
+
 	cln.CancelConnection()
-	<-conend
 }

@@ -16,6 +16,7 @@ var (
 	timeout = flag.Duration("timeout", 60*time.Second, "timeout")
 	miao    = flag.String("miao", "", "address of the miaomiao")
 	check   = flag.Bool("check", true, "check for NewSensor condition")
+	once    = flag.Bool("once", false, "don't continue after first read")
 )
 
 func main() {
@@ -59,7 +60,17 @@ func main() {
 	}
 
 	reading, err := miao.ReadSensor()
-	log.Printf("miao reading: %v", reading)
-	log.Printf("libre reading: %v", reading.LibrePacket)
+	// log.Printf("miao reading: %v", reading)
+	reading.Print()
+	reading.LibrePacket.Print()
+
+	if !*once {
+		log.Printf("continuing to decode reads")
+		emitter := miao.ReadingEmitter()
+		for pkt := range emitter {
+			pkt.Print()
+			pkt.LibrePacket.Print()
+		}
+	}
 	cln.CancelConnection()
 }

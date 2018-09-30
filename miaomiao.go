@@ -191,20 +191,22 @@ func (lcm *ConnectedMiao) MiaoLibreStatus() (MiaoDeviceState, error) {
 }
 
 type MiaoMiaoPacket struct {
-	data            [363]byte
-	pktLength       uint16
-	serialNumber    [9]byte
-	fimrwareVersion uint16
-	hardwareVersion uint16
-	LibrePacket     *LibrePacket
+	Data              [363]byte
+	PktLength         uint16
+	SerialNumber      [9]byte
+	FimrwareVersion   uint16
+	HardwareVersion   uint16
+	BatteryPercentage uint8
+	LibrePacket       *LibrePacket
 }
 
 func CreateMiaoMiaoPacket(data [363]byte) MiaoMiaoPacket {
 	var (
-		pktLength       uint16
-		serialNumber    [9]byte
-		firmwareVersion uint16
-		hardwareVersion uint16
+		pktLength         uint16
+		serialNumber      [9]byte
+		firmwareVersion   uint16
+		hardwareVersion   uint16
+		batteryPercentage uint8
 	)
 	if data[0] != 0x28 {
 		log.Printf("start of packet missing")
@@ -216,16 +218,24 @@ func CreateMiaoMiaoPacket(data [363]byte) MiaoMiaoPacket {
 	copy(serialNumber[0:9], data[3:13])
 	firmwareVersion = binary.BigEndian.Uint16(data[14:16])
 	hardwareVersion = binary.BigEndian.Uint16(data[16:18])
-
+	batteryPercentage = uint8(data[13])
 	var lpData [344]byte
 	copy(lpData[:], data[18:362])
 	lp := CreateLibrePacketNow(lpData)
 
 	return MiaoMiaoPacket{
-		data, pktLength, serialNumber, firmwareVersion, hardwareVersion, &lp}
+		data, pktLength, serialNumber, firmwareVersion, hardwareVersion, batteryPercentage, &lp}
 }
 
-// 18 - 363
+func (mmp MiaoMiaoPacket) Print() {
+	fmt.Printf("MiaoMiaoPacket\n")
+	fmt.Printf("  PktLength: %v\n", mmp.PktLength)
+	fmt.Printf("  SerialNumber: %v\n", mmp.SerialNumber)
+	fmt.Printf("  FirmwareVersion: %v\n", mmp.FimrwareVersion)
+	fmt.Printf("  HardwareVersion: %v\n", mmp.HardwareVersion)
+	fmt.Printf("  BatteryPercentage: %v\n", mmp.BatteryPercentage)
+}
+
 func (lcm *ConnectedMiao) ReadSensor() (*MiaoMiaoPacket, error) {
 	mp, err := lcm.PollResponse()
 	if err != nil {
@@ -237,4 +247,22 @@ func (lcm *ConnectedMiao) ReadSensor() (*MiaoMiaoPacket, error) {
 	} else {
 		return nil, fmt.Errorf("did not recieve sensor response")
 	}
+}
+
+func (lcm *ConnectedMiao) ReadingEmitter() chan MiaoMiaoPacket {
+	emitter := make(chan MiaoMiaoPacket)
+	go func() {
+		var mr *MiaoResponsePacket
+		var err error
+		for {
+			mr, err = lcm.MiaoResponse()
+			if err != nil {
+				close(emitter)
+			}
+			if mr.Type == MPLibre {
+				emitter <- CreateMiaoMiaoPacket(mr.Data)
+			}
+		}
+	}()
+	return emitter
 }

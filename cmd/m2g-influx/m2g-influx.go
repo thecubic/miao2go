@@ -1,8 +1,10 @@
 package main
 
+// miao2go: accept new sensor (when relevant)
+
 import (
 	"flag"
-	// "fmt"
+	"fmt"
 	"github.com/currantlabs/ble"
 	"github.com/currantlabs/ble/linux"
 	"github.com/thecubic/miao2go"
@@ -12,10 +14,11 @@ import (
 )
 
 var (
-	timeout    = flag.Duration("timeout", 60*time.Second, "timeout")
-	miao       = flag.String("miao", "", "address of the miaomiao")
-	dup        = flag.Bool("dup", true, "allow duplicate reported")
-	clientChar = ble.MustParse("00002902-0000-1000-8000-00805f9b34fb")
+	timeout = flag.Duration("timeout", 60*time.Second, "timeout")
+	miao    = flag.String("miao", "", "address of the miaomiao")
+	check   = flag.Bool("check", true, "check for NewSensor condition")
+	once    = flag.Bool("once", false, "don't continue after first read")
+	print   = flag.Bool("print", false, "print out packet details")
 )
 
 func main() {
@@ -48,43 +51,42 @@ func main() {
 		log.Printf("connected to %v", cln.Address())
 	}
 
-	conend := make(chan struct{})
-
 	go func() {
 		<-cln.Disconnected()
 		log.Printf("disconnected from %v", cln.Address())
-		close(conend)
 	}()
 
 	miao, err := miao2go.AttachBTLE(cln)
-
 	if err != nil {
 		log.Fatalf("couldn't get Miao descriptor: %v", err)
 	}
-	log.Printf("miao: %v\n", miao)
 
-	err = miao.Subscribe()
-	if err != nil {
-		log.Fatalf("couldn't sub/unsub Miao: %v", err)
+	if *once {
+		reading, err := miao.ReadSensor()
+		if err == nil {
+			if *print {
+				reading.Print()
+				reading.LibrePacket.Print()
+			}
+		} else {
+			log.Printf("error in read attempt: %v", err)
+		}
+	} else {
+		emitter := miao.ReadingEmitter()
+		for pkt := range emitter {
+			if *print {
+				pkt.Print()
+				pkt.LibrePacket.Print()
+			}
+			json, err := pkt.ToJSON()
+			if err == nil {
+				fmt.Printf("packet captured in %v\n", pkt.EndTime.Sub(pkt.StartTime))
+				fmt.Printf("JSONed packet created, len %v\n", len(json))
+			} else {
+				log.Printf("error in read attempt: %v", err)
+			}
+			fmt.Printf("next data emission scheduled for: %v\n", miao.NextEmit)
+		}
 	}
-
-	mr, err := miao.MiaoResponse()
-	if err != nil {
-		log.Fatalf("mr error: %v", err)
-	}
-
-	switch mr.Type {
-	case miao2go.MPLibre:
-		log.Printf("Libre response: %v", mr.Data)
-		mmp := miao2go.CreateMiaoMiaoPacket(mr.Data)
-		log.Printf("mmp: %v", mmp)
-	case miao2go.MPNoSensor:
-		log.Printf("No Sensor")
-	case miao2go.MPNewSensor:
-		log.Printf("New Sensor")
-	}
-
-	// TODO: do something with the packet
 	cln.CancelConnection()
-	<-conend
 }

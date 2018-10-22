@@ -70,15 +70,15 @@ type ConnectedMiao struct {
 
 // MiaoMiaoPacket is a deserialized device reading inclusive of a LibrePacket
 type MiaoMiaoPacket struct {
-	Data              [363]byte
-	PktLength         uint16
-	SerialNumber      string
-	FimrwareVersion   uint16
-	HardwareVersion   uint16
-	BatteryPercentage uint8
-	StartTime         time.Time
-	EndTime           time.Time
-	LibrePacket       *LibrePacket
+	Data              [363]byte    `json:"raw_data"`
+	PktLength         uint16       `json:"length"`
+	SerialNumber      string       `json:"serial"`
+	FimrwareVersion   uint16       `json:"fwver"`
+	HardwareVersion   uint16       `json:"hwver"`
+	BatteryPercentage uint8        `json:"batpct"`
+	StartTime         time.Time    `json:"start"`
+	EndTime           time.Time    `json:"end"`
+	LibrePacket       *LibrePacket `json:"libre"`
 }
 
 // AttachBTLE creates a connection descriptor for a miaomiao based on input
@@ -320,6 +320,12 @@ func (mmp MiaoMiaoPacket) Print() {
 // ToJSON serializes a MiaoMiaoPacket for transfer to a deserializer somewhere else
 func (mmp MiaoMiaoPacket) ToJSON() ([]byte, error) {
 	return json.Marshal(mmp)
+}
+
+func MMPFromJSON(seriald []byte) (MiaoMiaoPacket, error) {
+	var mmp MiaoMiaoPacket
+	err := json.Unmarshal(seriald, &mmp)
+	return mmp, err
 }
 
 func (lcm *ConnectedMiao) ReadSensor() (*MiaoMiaoPacket, error) {

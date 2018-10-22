@@ -16,21 +16,21 @@ const (
 )
 
 type LibreReading struct {
-	data [6]byte
+	Data [6]byte `json:"data"`
 }
 
 type LibrePacket struct {
-	Data         [344]byte
-	SerialNumber string
-	XmitCrcs     [3]uint16
-	Minutes      uint16
-	TrendIndex   int
-	Trend        [16]LibreReading
-	HistoryIndex int
-	History      [32]LibreReading
-	TimeStarted  time.Time
-	SensorAge    time.Duration
-	CaptureTime  time.Time
+	Data         [344]byte        `json:"raw_data"`
+	SerialNumber string           `json:"serial"`
+	XmitCrcs     [3]uint16        `json:"crcs"`
+	Minutes      uint16           `json:"minutes"`
+	TrendIndex   int              `json:"trend_i"`
+	Trend        [16]LibreReading `json:"trends"`
+	HistoryIndex int              `json:"history_i"`
+	History      [32]LibreReading `json:"history"`
+	TimeStarted  time.Time        `json:"started"`
+	SensorAge    time.Duration    `json:"age"`
+	CaptureTime  time.Time        `json:"time"`
 }
 
 const (

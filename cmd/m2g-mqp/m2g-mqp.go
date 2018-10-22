@@ -1,7 +1,7 @@
 package main
 
 import (
-	// "encoding/json"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/currantlabs/ble"
@@ -36,8 +36,8 @@ func main() {
 	if len(*miao) == 0 {
 		log.Fatalf("must pass miao")
 	}
-	mqtt.DEBUG = log.New(os.Stdout, "", 0)
-	mqtt.ERROR = log.New(os.Stdout, "", 0)
+	// mqtt.DEBUG = log.New(os.Stdout, "", 0)
+	mqtt.ERROR = log.New(os.Stderr, "", 0)
 	opts := mqtt.NewClientOptions().AddBroker(*broker).SetClientID(*clientid)
 	opts.SetKeepAlive(2 * time.Second)
 	opts.SetDefaultPublishHandler(f)
@@ -98,7 +98,7 @@ func main() {
 				pkt.Print()
 				pkt.LibrePacket.Print()
 			}
-			json, err := pkt.ToJSON()
+			json, err := json.Marshal(pkt)
 			if err == nil {
 				fmt.Printf("packet captured in %v\n", pkt.EndTime.Sub(pkt.StartTime))
 				fmt.Printf("JSONed packet created, len %v\n", len(json))

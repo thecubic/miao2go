@@ -1,12 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	// "github.com/currantlabs/ble"
 	// "github.com/currantlabs/ble/linux"
 	"github.com/eclipse/paho.mqtt.golang"
-	// "github.com/thecubic/miao2go"
+	"github.com/thecubic/miao2go"
 	// "golang.org/x/net/context"
 	"log"
 	"os"
@@ -20,17 +21,16 @@ var (
 	clientid = flag.String("clientid", "m2g-mqs", "MQTT Client ID")
 )
 
-var f mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
-	fmt.Printf("TOPIC: %s\n", msg.Topic())
-	fmt.Printf("MSG: %s\n", msg.Payload())
-}
-
 func main() {
-	mqtt.DEBUG = log.New(os.Stdout, "", 0)
-	mqtt.ERROR = log.New(os.Stdout, "", 0)
+	var err error
+	msgTransport := make(chan mqtt.Message)
+	var msgHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
+		msgTransport <- msg
+	}
+	mqtt.ERROR = log.New(os.Stderr, "", 0)
 	opts := mqtt.NewClientOptions().AddBroker(*broker).SetClientID(*clientid)
 	opts.SetKeepAlive(2 * time.Second)
-	opts.SetDefaultPublishHandler(f)
+	opts.SetDefaultPublishHandler(msgHandler)
 	opts.SetPingTimeout(1 * time.Second)
 
 	c := mqtt.NewClient(opts)
@@ -44,18 +44,30 @@ func main() {
 		os.Exit(1)
 	}
 
-	for i := 0; i < 5; i++ {
-		text := fmt.Sprintf("this is msg #%d!", i)
-		token := c.Publish(fulltopic, 0, false, text)
-		token.Wait()
+	for msg := range msgTransport {
+		log.Printf("[%v] %v", msg.MessageID(), msg.Topic())
+		var mmp miao2go.MiaoMiaoPacket
+		err = json.Unmarshal(msg.Payload(), &mmp)
+		if err == nil {
+			mmp.Print()
+			mmp.LibrePacket.Print()
+		} else {
+			log.Printf("err in Unmarshal: %v", err)
+		}
 	}
 
-	time.Sleep(6 * time.Second)
-
-	if token := c.Unsubscribe(fulltopic); token.Wait() && token.Error() != nil {
-		fmt.Println(token.Error())
-		os.Exit(1)
-	}
+	// for i := 0; i < 5; i++ {
+	// 	text := fmt.Sprintf("this is msg #%d!", i)
+	// 	token := c.Publish(fulltopic, 0, false, text)
+	// 	token.Wait()
+	// }
+	//
+	// time.Sleep(6 * time.Second)
+	//
+	// if token := c.Unsubscribe(fulltopic); token.Wait() && token.Error() != nil {
+	// 	fmt.Println(token.Error())
+	// 	os.Exit(1)
+	// }
 
 	c.Disconnect(250)
 

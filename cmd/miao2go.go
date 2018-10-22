@@ -56,7 +56,6 @@ func main() {
 		close(conend)
 	}()
 
-	// miao, err := getMiaoDescriptor(cln)
 	miao, err := miao2go.AttachBTLE(cln)
 
 	if err != nil {

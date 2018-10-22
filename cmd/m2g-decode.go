@@ -4,6 +4,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"github.com/currantlabs/ble"
 	"github.com/currantlabs/ble/linux"
 	"github.com/thecubic/miao2go"
@@ -17,6 +18,7 @@ var (
 	miao    = flag.String("miao", "", "address of the miaomiao")
 	check   = flag.Bool("check", true, "check for NewSensor condition")
 	once    = flag.Bool("once", false, "don't continue after first read")
+	print   = flag.Bool("print", false, "print out packet details")
 )
 
 func main() {
@@ -59,17 +61,31 @@ func main() {
 		log.Fatalf("couldn't get Miao descriptor: %v", err)
 	}
 
-	reading, err := miao.ReadSensor()
-	// log.Printf("miao reading: %v", reading)
-	reading.Print()
-	reading.LibrePacket.Print()
-
-	if !*once {
-		log.Printf("continuing to decode reads")
+	if *once {
+		reading, err := miao.ReadSensor()
+		if err == nil {
+			if *print {
+				reading.Print()
+				reading.LibrePacket.Print()
+			}
+		} else {
+			log.Printf("error in read attempt: %v", err)
+		}
+	} else {
 		emitter := miao.ReadingEmitter()
 		for pkt := range emitter {
-			pkt.Print()
-			pkt.LibrePacket.Print()
+			if *print {
+				pkt.Print()
+				pkt.LibrePacket.Print()
+			}
+			json, err := pkt.ToJSON()
+			if err == nil {
+				fmt.Printf("packet captured in %v\n", pkt.EndTime.Sub(pkt.StartTime))
+				fmt.Printf("JSONed packet created, len %v\n", len(json))
+			} else {
+				log.Printf("error in read attempt: %v", err)
+			}
+			fmt.Printf("next data emission scheduled for: %v\n", miao.NextEmit)
 		}
 	}
 	cln.CancelConnection()

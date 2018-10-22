@@ -1,86 +1,63 @@
 package main
 
-// miao2go: accept new sensor (when relevant)
-
 import (
 	"flag"
-	"github.com/currantlabs/ble"
-	"github.com/currantlabs/ble/linux"
-	"github.com/thecubic/miao2go"
-	"golang.org/x/net/context"
+	"fmt"
+	// "github.com/currantlabs/ble"
+	// "github.com/currantlabs/ble/linux"
+	"github.com/eclipse/paho.mqtt.golang"
+	// "github.com/thecubic/miao2go"
+	// "golang.org/x/net/context"
 	"log"
+	"os"
 	"time"
 )
 
 var (
-	timeout = flag.Duration("timeout", 60*time.Second, "timeout")
-	miao    = flag.String("miao", "", "address of the miaomiao")
-	check   = flag.Bool("check", true, "check for NewSensor condition")
+	broker   = flag.String("broker", "tcp://localhost:1883", "MQTT broker address")
+	prefix   = flag.String("prefix", "", "subscription prefix")
+	topic    = flag.String("topic", "mmpackets", "subscription topic")
+	clientid = flag.String("clientid", "m2g-mqs", "MQTT Client ID")
 )
 
+var f mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
+	fmt.Printf("TOPIC: %s\n", msg.Topic())
+	fmt.Printf("MSG: %s\n", msg.Payload())
+}
+
 func main() {
-	flag.Parse()
+	mqtt.DEBUG = log.New(os.Stdout, "", 0)
+	mqtt.ERROR = log.New(os.Stdout, "", 0)
+	opts := mqtt.NewClientOptions().AddBroker(*broker).SetClientID(*clientid)
+	opts.SetKeepAlive(2 * time.Second)
+	opts.SetDefaultPublishHandler(f)
+	opts.SetPingTimeout(1 * time.Second)
 
-	if len(*miao) == 0 {
-		log.Fatalf("must pass miao")
-	}
-	d, err := linux.NewDevice()
-	if err != nil {
-		log.Fatalf("can't new device : %s", err)
-	}
-	ble.SetDefaultDevice(d)
-
-	ctx := ble.WithSigHandler(context.WithTimeout(context.Background(), *timeout))
-
-	log.Printf("connecting to %v", *miao)
-	filter := func(adv ble.Advertisement) bool {
-		if len(adv.LocalName()) > 0 {
-			if adv.LocalName() == "miaomiao" {
-				log.Printf("found a miao: %v", adv.Address().String())
-			}
-		}
-		return adv.Address().String() == *miao
-	}
-	cln, err := ble.Connect(ctx, filter)
-	if err != nil {
-		log.Fatalf("couldn't connect to %v: %v", miao, err)
-	} else {
-		log.Printf("connected to %v", cln.Address())
+	c := mqtt.NewClient(opts)
+	if token := c.Connect(); token.Wait() && token.Error() != nil {
+		panic(token.Error())
 	}
 
-	go func() {
-		<-cln.Disconnected()
-		log.Printf("disconnected from %v", cln.Address())
-	}()
-
-	miao, err := miao2go.AttachBTLE(cln)
-	if err != nil {
-		log.Fatalf("couldn't get Miao descriptor: %v", err)
-	}
-	log.Printf("miao: %v\n", miao)
-	mr, err := miao.PollResponse()
-
-	newSensorMode := false
-	switch mr.Type {
-	case miao2go.MPLibre:
-		log.Printf("miaomiao: reporting mode")
-	case miao2go.MPNoSensor:
-		log.Printf("miaomiao: no sensor")
-	case miao2go.MPNewSensor:
-		log.Printf("miaomiao: new sensor")
-		newSensorMode = true
+	fulltopic := fmt.Sprintf("%s%s", *prefix, *topic)
+	if token := c.Subscribe(fulltopic, 0, nil); token.Wait() && token.Error() != nil {
+		fmt.Println(token.Error())
+		os.Exit(1)
 	}
 
-	if *check && !newSensorMode {
-		log.Fatalf("sensor not in new sensor mode")
+	for i := 0; i < 5; i++ {
+		text := fmt.Sprintf("this is msg #%d!", i)
+		token := c.Publish(fulltopic, 0, false, text)
+		token.Wait()
 	}
 
-	log.Printf("accepting sensor...")
+	time.Sleep(6 * time.Second)
 
-	err = miao.AcceptNewSensor()
-	if err != nil {
-		log.Printf("couldn't accept new sensor")
+	if token := c.Unsubscribe(fulltopic); token.Wait() && token.Error() != nil {
+		fmt.Println(token.Error())
+		os.Exit(1)
 	}
 
-	cln.CancelConnection()
+	c.Disconnect(250)
+
+	time.Sleep(1 * time.Second)
 }

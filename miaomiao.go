@@ -2,15 +2,19 @@ package miao2go
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"github.com/currantlabs/ble"
 	"log"
+	"time"
 )
 
 var (
-	nrfData = ble.MustParse("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
-	nrfRecv = ble.MustParse("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
-	nrfXmit = ble.MustParse("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
+	zeroTime     = time.Time{}
+	zeroDuration = time.Duration(0)
+	nrfData      = ble.MustParse("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
+	nrfRecv      = ble.MustParse("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
+	nrfXmit      = ble.MustParse("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
 )
 
 type MiaoBluetoothState int
@@ -35,12 +39,15 @@ const encapsulatedEnd = 0x29
 
 type gattResponsePacket struct {
 	data []byte
+	time time.Time
 }
 
 type MiaoResponsePacket struct {
 	Type         MiaoDeviceState
 	Data         [363]byte
 	SensorPacket *LibreResponsePacket
+	StartTime    time.Time
+	EndTime      time.Time
 }
 
 type LibreResponsePacket struct {
@@ -56,8 +63,27 @@ type ConnectedMiao struct {
 	BtState        MiaoBluetoothState
 	DevState       MiaoDeviceState
 	datachan       chan gattResponsePacket
+	LastEmit       time.Time
+	NextEmit       time.Time
+	emitInterval   time.Duration
 }
 
+// MiaoMiaoPacket is a deserialized device reading inclusive of a LibrePacket
+type MiaoMiaoPacket struct {
+	Data              [363]byte
+	PktLength         uint16
+	SerialNumber      string
+	FimrwareVersion   uint16
+	HardwareVersion   uint16
+	BatteryPercentage uint8
+	StartTime         time.Time
+	EndTime           time.Time
+	LibrePacket       *LibrePacket
+}
+
+// AttachBTLE creates a connection descriptor for a miaomiao based on input
+// of a legitimate BLE-layer connected device.  It will fail if you give it
+// a BT mouse or whatever
 func AttachBTLE(blec ble.Client) (*ConnectedMiao, error) {
 	var err error
 	var nrfDataService *ble.Service
@@ -100,30 +126,53 @@ func AttachBTLE(blec ble.Client) (*ConnectedMiao, error) {
 		return nil, fmt.Errorf("miaoClientDesc missing")
 	}
 	// we're in business!
-	return &ConnectedMiao{blec, nrfDataService, nrfDataRecv, nrfDataXmit,
-		miaoClientDesc, MSConnected, MPDeclared, make(chan gattResponsePacket)}, nil
+	return &ConnectedMiao{
+		blec,
+		nrfDataService,
+		nrfDataRecv,
+		nrfDataXmit,
+		miaoClientDesc,
+		MSConnected,
+		MPDeclared,
+		make(chan gattResponsePacket),
+		zeroTime,
+		zeroTime,
+		zeroDuration,
+	}, nil
 }
 
+// gattDataCallback handles the trigger of data callback and shuffles said data
+// to the objects data channel for deserialization elsewhere
 func (lcm *ConnectedMiao) gattDataCallback(data []byte) {
 	if lcm.BtState == MSSubscribed {
-		log.Printf("MSSubscribed -> MSBeingNotified")
+		// log.Printf("MSSubscribed -> MSBeingNotified")
 		lcm.BtState = MSBeingNotified
+		// log.Printf("lastEmit: %v", lcm.LastEmit)
+		lcm.LastEmit = time.Now()
+		// log.Printf("thisEmit: %v", lcm.LastEmit)
 	}
-	lcm.datachan <- gattResponsePacket{data}
+	lcm.datachan <- gattResponsePacket{data, time.Now()}
 }
 
+// MiaoResponse reads an active BTLE datastream to a packet structure
+// that only represents the thin layer of the device itself, and must
+// be sent to other functions ()
 func (lcm *ConnectedMiao) MiaoResponse() (*MiaoResponsePacket, error) {
 	var response *MiaoResponsePacket
 	var packetData [363]byte
 	packetOffset := 0
 	packetFinished := false
-	response = &MiaoResponsePacket{MPDeclared, packetData, nil}
+	response = &MiaoResponsePacket{MPDeclared, packetData, nil, lcm.LastEmit, time.Time{}}
 	for packetFinished == false {
 		gattpacket, ok := <-lcm.datachan
+		if response.StartTime.IsZero() {
+			response.StartTime = gattpacket.time
+		}
 		gattpacketlength := len(gattpacket.data)
 		if !ok {
 			return nil, fmt.Errorf("datachan hangup")
 		}
+		// log.Printf("recv'd from %v - %v", packetOffset, packetOffset+gattpacketlength)
 		copied := copy(response.Data[packetOffset:packetOffset+gattpacketlength], gattpacket.data)
 		if packetOffset == 0 && copied >= 1 {
 			switch response.Data[0] {
@@ -143,19 +192,25 @@ func (lcm *ConnectedMiao) MiaoResponse() (*MiaoResponsePacket, error) {
 		}
 		packetOffset += copied
 		if packetOffset == len(response.Data) {
+			// log.Printf("packetFinished")
 			packetFinished = true
+			response.EndTime = gattpacket.time
 		}
 	}
 	lcm.BtState = MSSubscribed
 	return response, nil
 }
 
+// Subscribe negotiates the data wakeup interval with the device itself.
+// currently only allows for 5-minute interval signaling
 func (lcm *ConnectedMiao) Subscribe() error {
 	var err error
 	if err = lcm.client.Subscribe(lcm.nrfXmitChar, false, lcm.gattDataCallback); err != nil {
 		log.Fatalf("XMIT subscribe failed: %s", err)
 	}
 	lcm.BtState = MSSubscribed
+	// only know the one
+	lcm.emitInterval = time.Duration(5 * time.Minute)
 	err = lcm.client.WriteDescriptor(lcm.clientDesc, []byte{0x01, 0x00})
 	if err != nil {
 		return fmt.Errorf("error in first write: %v", err)
@@ -167,10 +222,13 @@ func (lcm *ConnectedMiao) Subscribe() error {
 	return nil
 }
 
+// AcceptNewSensor notifies the device to start reading the attached sensor,
+// which has not yet been read by this device (it's like pairing)
 func (lcm *ConnectedMiao) AcceptNewSensor() error {
 	return lcm.client.WriteCharacteristic(lcm.nrfRecvChar, []byte{0xd3, 0xd1}, false)
 }
 
+// PollResponse assures that a subscription is active and returns one reading
 func (lcm *ConnectedMiao) PollResponse() (*MiaoResponsePacket, error) {
 	if lcm.BtState != MSSubscribed {
 		err := lcm.Subscribe()
@@ -181,6 +239,8 @@ func (lcm *ConnectedMiao) PollResponse() (*MiaoResponsePacket, error) {
 	return lcm.MiaoResponse()
 }
 
+// MiaoLibreStatus is a helper function to return just the miaomiao's state
+// i.e. new sensor, no sensor, or readings-ready
 func (lcm *ConnectedMiao) MiaoLibreStatus() (MiaoDeviceState, error) {
 	mp, err := lcm.PollResponse()
 	if err != nil {
@@ -190,50 +250,76 @@ func (lcm *ConnectedMiao) MiaoLibreStatus() (MiaoDeviceState, error) {
 	return mp.Type, err
 }
 
-type MiaoMiaoPacket struct {
-	Data              [363]byte
-	PktLength         uint16
-	SerialNumber      [9]byte
-	FimrwareVersion   uint16
-	HardwareVersion   uint16
-	BatteryPercentage uint8
-	LibrePacket       *LibrePacket
-}
+// // CreateMiaoMiaoPacket deserializes a recieved packet from miaomiao
+// func CreateMiaoMiaoPacket(data [363]byte) MiaoMiaoPacket {
+// 	var (
+// 		pktLength         uint16
+// 		serialNumber      string
+// 		firmwareVersion   uint16
+// 		hardwareVersion   uint16
+// 		batteryPercentage uint8
+// 	)
+// 	if data[0] != 0x28 {
+// 		log.Printf("start of packet missing")
+// 	}
+// 	if data[362] != 0x29 {
+// 		log.Printf("end of packet missing")
+// 	}
+// 	pktLength = binary.BigEndian.Uint16(data[1:3])
+// 	serialNumber, _ = BinarySerialToString(data[5:11])
+// 	firmwareVersion = binary.BigEndian.Uint16(data[14:16])
+// 	hardwareVersion = binary.BigEndian.Uint16(data[16:18])
+// 	batteryPercentage = uint8(data[13])
+// 	var lpData [344]byte
+// 	copy(lpData[:], data[18:362])
+// 	lp := CreateLibrePacketNow(lpData, serialNumber)
+//
+// 	return MiaoMiaoPacket{
+// 		data, pktLength, serialNumber, firmwareVersion, hardwareVersion, batteryPercentage, time.Time{}, time.Time{}, &lp}
+// }
 
-func CreateMiaoMiaoPacket(data [363]byte) MiaoMiaoPacket {
+func CreateMiaoMiaoPacket(mmr *MiaoResponsePacket) MiaoMiaoPacket {
 	var (
 		pktLength         uint16
-		serialNumber      [9]byte
+		serialNumber      string
 		firmwareVersion   uint16
 		hardwareVersion   uint16
 		batteryPercentage uint8
 	)
-	if data[0] != 0x28 {
+	if mmr.Data[0] != 0x28 {
 		log.Printf("start of packet missing")
 	}
-	if data[362] != 0x29 {
+	if mmr.Data[362] != 0x29 {
 		log.Printf("end of packet missing")
 	}
-	pktLength = binary.BigEndian.Uint16(data[1:3])
-	copy(serialNumber[0:9], data[3:13])
-	firmwareVersion = binary.BigEndian.Uint16(data[14:16])
-	hardwareVersion = binary.BigEndian.Uint16(data[16:18])
-	batteryPercentage = uint8(data[13])
+	pktLength = binary.BigEndian.Uint16(mmr.Data[1:3])
+	serialNumber, _ = BinarySerialToString(mmr.Data[5:11])
+	firmwareVersion = binary.BigEndian.Uint16(mmr.Data[14:16])
+	hardwareVersion = binary.BigEndian.Uint16(mmr.Data[16:18])
+	batteryPercentage = uint8(mmr.Data[13])
 	var lpData [344]byte
-	copy(lpData[:], data[18:362])
-	lp := CreateLibrePacketNow(lpData)
+	copy(lpData[:], mmr.Data[18:362])
+	lp := CreateLibrePacketNow(lpData, serialNumber)
 
 	return MiaoMiaoPacket{
-		data, pktLength, serialNumber, firmwareVersion, hardwareVersion, batteryPercentage, &lp}
+		mmr.Data, pktLength, serialNumber, firmwareVersion, hardwareVersion, batteryPercentage, mmr.StartTime, mmr.EndTime, &lp}
 }
 
+// Print just gives you the deets of a miaomiao packet reading
 func (mmp MiaoMiaoPacket) Print() {
 	fmt.Printf("MiaoMiaoPacket\n")
+	fmt.Printf("  StartTime: %v\n", mmp.StartTime)
+	fmt.Printf("  EndTime: %v\n", mmp.EndTime)
 	fmt.Printf("  PktLength: %v\n", mmp.PktLength)
 	fmt.Printf("  SerialNumber: %v\n", mmp.SerialNumber)
 	fmt.Printf("  FirmwareVersion: %v\n", mmp.FimrwareVersion)
 	fmt.Printf("  HardwareVersion: %v\n", mmp.HardwareVersion)
 	fmt.Printf("  BatteryPercentage: %v\n", mmp.BatteryPercentage)
+}
+
+// ToJSON serializes a MiaoMiaoPacket for transfer to a deserializer somewhere else
+func (mmp MiaoMiaoPacket) ToJSON() ([]byte, error) {
+	return json.Marshal(mmp)
 }
 
 func (lcm *ConnectedMiao) ReadSensor() (*MiaoMiaoPacket, error) {
@@ -242,26 +328,36 @@ func (lcm *ConnectedMiao) ReadSensor() (*MiaoMiaoPacket, error) {
 		return nil, err
 	}
 	if mp.Type == MPLibre {
-		reading := CreateMiaoMiaoPacket(mp.Data)
+		reading := CreateMiaoMiaoPacket(mp)
 		return &reading, err
 	} else {
 		return nil, fmt.Errorf("did not recieve sensor response")
 	}
 }
 
+// ReadingEmitter returns a channel that is hooked into a goroutine that
+// blocks on BLE information transfer, and returns deserialized miaomiao packets
 func (lcm *ConnectedMiao) ReadingEmitter() chan MiaoMiaoPacket {
 	emitter := make(chan MiaoMiaoPacket)
 	go func() {
 		var mr *MiaoResponsePacket
 		var err error
 		for {
-			mr, err = lcm.MiaoResponse()
+			if lcm.NextEmit.IsZero() {
+				// log.Printf("RE First Emit")
+			} else {
+				// log.Printf("RE NextEmit: %v", lcm.NextEmit)
+			}
+			mr, err = lcm.PollResponse()
 			if err != nil {
 				close(emitter)
 			}
+			lcm.NextEmit = lcm.LastEmit.Add(lcm.emitInterval)
+			// log.Printf("RE LastEmit: %v", lcm.LastEmit)
 			if mr.Type == MPLibre {
-				emitter <- CreateMiaoMiaoPacket(mr.Data)
+				emitter <- CreateMiaoMiaoPacket(mr)
 			}
+			// sleep until next emit?
 		}
 	}()
 	return emitter

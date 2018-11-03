@@ -14,14 +14,18 @@ import (
 )
 
 var (
-	timeout = flag.Duration("timeout", 60*time.Second, "timeout")
-	miao    = flag.String("miao", "", "address of the miaomiao")
-	check   = flag.Bool("check", true, "check for NewSensor condition")
-	once    = flag.Bool("once", false, "don't continue after first read")
-	print   = flag.Bool("print", false, "print out packet details")
+	timeout  = flag.Duration("timeout", 60*time.Second, "timeout")
+	miao     = flag.String("miao", "", "address of the miaomiao")
+	check    = flag.Bool("check", true, "check for NewSensor condition")
+	once     = flag.Bool("once", false, "don't continue after first read")
+	print    = flag.Bool("print", false, "print out packet details")
+	noaccept = flag.Bool("noaccept", false, "don't accept new sensors")
 )
 
 func main() {
+	var (
+		err error
+	)
 	flag.Parse()
 
 	if len(*miao) == 0 {
@@ -72,16 +76,14 @@ func main() {
 			log.Printf("error in read attempt: %v", err)
 		}
 	} else {
-		emitter := miao.ReadingEmitter()
+		emitter := miao.ReadingEmitter(!*noaccept)
 		for pkt := range emitter {
 			if *print {
 				pkt.Print()
 				pkt.LibrePacket.Print()
 			}
-			json, err := pkt.ToJSON()
 			if err == nil {
 				fmt.Printf("packet captured in %v\n", pkt.EndTime.Sub(pkt.StartTime))
-				fmt.Printf("JSONed packet created, len %v\n", len(json))
 			} else {
 				log.Printf("error in read attempt: %v", err)
 			}

@@ -1,6 +1,6 @@
 package main
 
-// miao2go: accept new sensor (when relevant)
+// m2g-accept: accept new sensor (when relevant)
 
 import (
 	"flag"

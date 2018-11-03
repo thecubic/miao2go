@@ -1,5 +1,7 @@
 package main
 
+// m2g-mqp: read transciever and MQ publish measurements
+
 import (
 	"encoding/json"
 	"flag"
@@ -23,24 +25,20 @@ var (
 	clientid = flag.String("clientid", "m2g-mqp", "MQTT Client ID")
 	once     = flag.Bool("once", false, "don't continue after first read")
 	print    = flag.Bool("print", false, "print out packet details")
+	mqdebug  = flag.Bool("mqdebug", false, "MQ debugging output")
 )
-
-// miao2go: accept new sensor (when relevant)
-var f mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
-	fmt.Printf("TOPIC: %s\n", msg.Topic())
-	fmt.Printf("MSG: %s\n", msg.Payload())
-}
 
 func main() {
 	flag.Parse()
 	if len(*miao) == 0 {
 		log.Fatalf("must pass miao")
 	}
-	// mqtt.DEBUG = log.New(os.Stdout, "", 0)
+	if *mqdebug {
+		mqtt.DEBUG = log.New(os.Stderr, "", 0)
+	}
 	mqtt.ERROR = log.New(os.Stderr, "", 0)
 	opts := mqtt.NewClientOptions().AddBroker(*broker).SetClientID(*clientid)
 	opts.SetKeepAlive(2 * time.Second)
-	opts.SetDefaultPublishHandler(f)
 	opts.SetPingTimeout(1 * time.Second)
 	mq := mqtt.NewClient(opts)
 	if token := mq.Connect(); token.Wait() && token.Error() != nil {

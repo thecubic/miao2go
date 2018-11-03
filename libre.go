@@ -160,6 +160,26 @@ func CreateLibrePacket(data [344]byte, serialNumber string, captureTime time.Tim
 	}
 }
 
+// SensorStatus represents the sensor
+type SensorStatus byte
+
+const (
+	// SSUnknown represents no known state
+	SSUnknown SensorStatus = 0x00
+	// SSNotStarted means the sensor is powered on
+	SSNotStarted SensorStatus = 0x01
+	// SSStarting means the sensor is in 0-12h warmup
+	SSStarting SensorStatus = 0x02
+	// SSReady is the normal on-duty state 12h-15d
+	SSReady SensorStatus = 0x03
+	// SSExpired is 15d-15d12h last reading repreated
+	SSExpired SensorStatus = 0x04
+	// SSShutdown is at 15d12h+ it's dead
+	SSShutdown SensorStatus = 0x05
+	// SSFailed is any time it's otherwise broken
+	SSFailed SensorStatus = 0x06
+)
+
 func (lpkt *LibrePacket) Print() {
 	fmt.Printf("LibrePacket:\n")
 	fmt.Printf("  SerialNumber: %v\n", lpkt.SerialNumber)

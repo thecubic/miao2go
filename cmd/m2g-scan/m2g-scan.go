@@ -1,6 +1,6 @@
 package main
 
-// miao2go: accept new sensor (when relevant)
+// m2g-scan: find miaomiao transcievers
 
 import (
 	"flag"

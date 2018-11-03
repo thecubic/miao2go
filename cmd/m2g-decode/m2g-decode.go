@@ -1,6 +1,6 @@
 package main
 
-// miao2go: accept new sensor (when relevant)
+// m2g-decode: read transciever and show measurements
 
 import (
 	"flag"
